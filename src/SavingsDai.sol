@@ -134,14 +134,9 @@ contract SavingsDai {
     //     _;
     // }
 
-    constructor(
-        address _iqs,
-        address _igp,
-        address _remotePot,
-        uint32 _goerliDomain
-    ) {
+    constructor(address _remotePot) {
         remotePotDataAddress = _remotePot;
-        goerliDomain = _goerliDomain;
+
         deploymentChainId = block.chainid;
         _DOMAIN_SEPARATOR = _calculateDomainSeparator(block.chainid);
     }

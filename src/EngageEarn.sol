@@ -29,6 +29,7 @@ contract EngageEarn is SismoConnect {
     mapping(uint => uint) campaignPrizePool;
     mapping(uint => uint) campaignOwner;
     mapping(uint => address[]) campaignParticipants;
+    mapping(uint => bytes16) campaign2GroupId;
     uint orgId;
     uint campaignId;
 
@@ -41,8 +42,9 @@ contract EngageEarn is SismoConnect {
     bytes16 private _appId = 0x13acd90f1ab192cdd936293ee2ea759f;
     // use impersonated mode for testing
     bool private _isImpersonationMode = true;
+
     // foundry contributors
-    bytes16 public constant GROUP_ID = 0x843d4092ffba2a5b069f618dd7b6895d;
+    // bytes16 public constant GROUP_ID = 0x843d4092ffba2a5b069f618dd7b6895d;
 
     constructor(
         address _dai,
@@ -52,7 +54,11 @@ contract EngageEarn is SismoConnect {
         sDAI = _sDAI;
     }
 
-    function createCampaignPool(uint256 shares, uint assets) public payable {
+    function createCampaignPool(
+        uint256 shares,
+        uint assets,
+        bytes16 groupId
+    ) public payable {
         address creator = msg.sender;
         require(isRegistered[creator], "not registered");
         ISavingsDai(sDAI).redeem{value: msg.value}(
@@ -60,14 +66,15 @@ contract EngageEarn is SismoConnect {
             address(this),
             creator
         );
+        campaign2GroupId[campaignId] = groupId;
         campaignOwner[campaignId] = org2Id[creator];
         campaignPrizePool[campaignId++] = assets;
     }
 
     function checkMember(
         bytes memory response,
-        uint campaignId
-    ) public view returns (bool) {
+        uint _campaignId
+    ) public returns (bool) {
         SismoConnectVerifiedResult memory result = verify({
             responseBytes: response,
             // we want the user to prove that he owns a Sismo Vault
@@ -75,7 +82,7 @@ contract EngageEarn is SismoConnect {
             // the proofs provided in the response are valid with respect to this auth request
             auth: buildAuth({authType: AuthType.VAULT}),
             claim: buildClaim({
-                groupId: GROUP_ID,
+                groupId: campaign2GroupId[_campaignId],
                 value: 1,
                 claimType: ClaimType.GTE
             }),
@@ -83,7 +90,7 @@ contract EngageEarn is SismoConnect {
             signature: buildSignature({message: abi.encode(msg.sender)})
         });
 
-        campaignParticipants[campaignId].push(msg.sender);
+        campaignParticipants[_campaignId].push(msg.sender);
 
         return true;
     }
