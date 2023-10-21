@@ -1,0 +1,1 @@
+sismo-connect-solidity/=lib/sismo-connect-solidity/src/
