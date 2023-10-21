@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.17;
-import "./IInterchainQueryRouter.sol";
+// import "./IInterchainQueryRouter.sol";
+import "sismo-connect-solidity/SismoConnectLib.sol";
 
 interface IERC20 {
     function transferFrom(address from, address to, uint amount) external;
@@ -18,7 +19,7 @@ interface ISavingsDai {
     ) external payable;
 }
 
-contract EngageEarn {
+contract EngageEarn is SismoConnect {
     address dai;
     address sDAI;
 
@@ -36,9 +37,17 @@ contract EngageEarn {
         uint campaignOwner,
         uint campaignId,
         uint reward
-    );
+    ); // add your appId
+    bytes16 private _appId = 0x13acd90f1ab192cdd936293ee2ea759f;
+    // use impersonated mode for testing
+    bool private _isImpersonationMode = true;
+    // foundry contributors
+    bytes16 public constant GROUP_ID = 0x843d4092ffba2a5b069f618dd7b6895d;
 
-    constructor(address _dai, address _sDAI) {
+    constructor(
+        address _dai,
+        address _sDAI
+    ) SismoConnect(buildConfig(_appId, _isImpersonationMode)) {
         dai = _dai;
         sDAI = _sDAI;
     }
@@ -53,6 +62,30 @@ contract EngageEarn {
         );
         campaignOwner[campaignId] = org2Id[creator];
         campaignPrizePool[campaignId++] = assets;
+    }
+
+    function checkMember(
+        bytes memory response,
+        uint campaignId
+    ) public view returns (bool) {
+        SismoConnectVerifiedResult memory result = verify({
+            responseBytes: response,
+            // we want the user to prove that he owns a Sismo Vault
+            // we are recreating the auth request made in the frontend to be sure that
+            // the proofs provided in the response are valid with respect to this auth request
+            auth: buildAuth({authType: AuthType.VAULT}),
+            claim: buildClaim({
+                groupId: GROUP_ID,
+                value: 1,
+                claimType: ClaimType.GTE
+            }),
+            // we also want to check if the signed message provided in the response is the signature of the user's address
+            signature: buildSignature({message: abi.encode(msg.sender)})
+        });
+
+        campaignParticipants[campaignId].push(msg.sender);
+
+        return true;
     }
 
     function rewardCampaignParticipants(uint _campaignId) external {
