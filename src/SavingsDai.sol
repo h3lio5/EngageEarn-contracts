@@ -20,12 +20,7 @@
 
 pragma solidity ^0.8.17;
 
-import "./IInterchainQueryRouter.sol";
-import "./IInterchainGasPaymaster.sol";
-import "./IAxelarGateway.sol";
-import "./IAxelarGasService.sol";
-
-import "openzeppelin-contracts/contracts/utils/Strings.sol";
+import "forge-std/console.sol";
 
 interface IERC1271 {
     function isValidSignature(
@@ -66,6 +61,8 @@ interface DaiLike {
     function transferFrom(address, address, uint256) external returns (bool);
 
     function approve(address, uint256) external returns (bool);
+
+    function transfer(address, uint256) external returns (bool);
 }
 
 contract SavingsDai {
@@ -75,11 +72,6 @@ contract SavingsDai {
     string public constant version = "1";
     uint8 public constant decimals = 18;
     uint256 public totalSupply;
-
-    address axelarGateway = 0xe432150cce91c13a887f7D836923d5597adD8E31;
-    address axelarGasService = 0xbE406F0189A0B4cf3A05C286473D23791Dd44Cc6;
-    address remotePotDataAddress;
-    uint32 goerliDomain;
 
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
@@ -128,17 +120,19 @@ contract SavingsDai {
 
     uint256 private constant RAY = 10 ** 27;
 
-    /// @notice Only allow this function to be called via an IQS callback.
-    // modifier onlyCallback() {
-    //     require(msg.sender == iqsRouter);
-    //     _;
-    // }
-
-    constructor(address _remotePot) {
-        remotePotDataAddress = _remotePot;
+    constructor(address _daiJoin, address _pot) {
+        daiJoin = DaiJoinLike(_daiJoin);
+        // vat = VatLike(daiJoin.vat());
+        dai = DaiLike(daiJoin.dai());
+        pot = PotLike(_pot);
 
         deploymentChainId = block.chainid;
         _DOMAIN_SEPARATOR = _calculateDomainSeparator(block.chainid);
+
+        // vat.hope(address(daiJoin));
+        // vat.hope(address(pot));
+
+        dai.approve(address(daiJoin), type(uint256).max);
     }
 
     function _calculateDomainSeparator(
@@ -342,6 +336,9 @@ contract SavingsDai {
         address owner
     ) internal {
         uint256 balance = balanceOf[owner];
+        console.log("balance ", balance);
+        console.log("shares ", shares);
+
         require(balance >= shares, "SavingsDai/insufficient-balance");
 
         if (owner != msg.sender) {
@@ -362,6 +359,7 @@ contract SavingsDai {
 
         // pot.exit(shares);
         // daiJoin.exit(receiver, assets);
+        dai.transfer(receiver, assets);
 
         emit Withdraw(msg.sender, receiver, owner, assets, shares);
     }
@@ -400,90 +398,22 @@ contract SavingsDai {
         return convertToShares(assets);
     }
 
-    function deposit(uint256 assets, address receiver) public payable {
-        // bytes32 messageID = IInterchainQueryRouter(iqsRouter).query(
-        //     goerliDomain,
-        //     remotePotDataAddress,
-        //     abi.encodeWithSignature("sendRemoteData()"),
-        //     abi.encodePacked(this.depositCallback.selector, msg.sender, assets)
-        // );
-        uint flag = 1;
-        bytes memory payload = abi.encodePacked(
-            flag,
-            msg.sender,
-            msg.sender,
-            assets
-        );
-        // make gas payment
-        IAxelarGasService(axelarGasService).payNativeGasForContractCall{
-            value: msg.value
-        }(
-            address(this),
-            "goerli",
-            Strings.toHexString(uint256(uint160(remotePotDataAddress))),
-            payload,
-            msg.sender
-        );
-
-        IAxelarGateway(axelarGateway).callContract(
-            "goerli",
-            Strings.toHexString(uint256(uint160(remotePotDataAddress))),
-            payload
-        );
-        // Then, pay for gas
-
-        // The mainnet DefaultIsmInterchainGasPaymaster
-        // IInterchainGasPaymaster(igp).payForGas{value: msg.value}(
-        //     // The ID of the message
-        //     messageID,
-        //     // Destination domain
-        //     goerliDomain,
-        //     // The total gas amount. This should be the
-        //     // overhead gas amount (80,000 gas) + gas used by the query being made
-        //     2 * 80000,
-        //     // Refund the msg.sender
-        //     msg.sender
-        // );
-    }
-
-    function execute(
-        bytes32 commandId,
-        string calldata sourceChain,
-        string calldata sourceAddress,
-        bytes calldata payload
-    ) external {
-        (
-            uint flag,
-            address receiver,
-            address owner,
-            uint amount,
-            uint rho,
-            uint drip,
-            uint chi
-        ) = abi.decode(
-                payload,
-                (uint, address, address, uint, uint, uint, uint)
-            );
-
-        if (flag == 1) {
-            depositCallback(receiver, amount, rho, drip, chi);
-        } else if (flag == 2) {
-            redeemCallback(receiver, owner, amount, rho, drip, chi);
-        } else {
-            revert("unknown callback type");
-        }
-    }
-
-    function depositCallback(
-        address receiver,
-        uint assets,
-        uint rho,
-        uint drip,
-        uint chi
-    ) internal returns (uint shares) {
-        chi = (block.timestamp > rho) ? drip : chi;
+    function deposit(
+        uint256 assets,
+        address receiver
+    ) public returns (uint256 shares) {
+        uint256 chi = (block.timestamp > pot.rho()) ? pot.drip() : pot.chi();
         shares = (assets * RAY) / chi;
         _mint(assets, shares, receiver);
+    }
+
+    function deposit(
+        uint256 assets,
+        address receiver,
+        uint16 referral
+    ) external returns (uint256 shares) {
+        shares = deposit(assets, receiver);
+        emit Referral(referral, receiver, assets, shares);
     }
 
     function maxMint(address) external pure returns (uint256) {
@@ -550,61 +480,8 @@ contract SavingsDai {
         uint256 shares,
         address receiver,
         address owner
-    ) public payable {
-        // bytes32 messageID = IInterchainQueryRouter(iqsRouter).query(
-        //     goerliDomain,
-        //     remotePotDataAddress,
-        //     abi.encodeWithSignature("sendRemoteData()"),
-        //     abi.encodePacked(
-        //         this.depositCallback.selector,
-        //         receiver,
-        //         owner,
-        //         shares
-        //     )
-        // );
-        uint flag = 2;
-        bytes memory payload = abi.encodePacked(flag, receiver, owner, shares);
-        // make gas payment
-        IAxelarGasService(axelarGasService).payNativeGasForContractCall{
-            value: msg.value
-        }(
-            address(this),
-            "goerli",
-            Strings.toHexString(uint256(uint160(remotePotDataAddress))),
-            payload,
-            msg.sender
-        );
-
-        IAxelarGateway(axelarGateway).callContract(
-            "goerli",
-            Strings.toHexString(uint256(uint160(remotePotDataAddress))),
-            payload
-        );
-        // Then, pay for gas
-
-        // The mainnet DefaultIsmInterchainGasPaymaster
-        // IInterchainGasPaymaster(igp).payForGas{value: msg.value}(
-        //     // The ID of the message
-        //     messageID,
-        //     // Destination domain
-        //     goerliDomain,
-        //     // The total gas amount. This should be the
-        //     // overhead gas amount (80,000 gas) + gas used by the query being made
-        //     2 * 80000,
-        //     // Refund the msg.sender
-        //     msg.sender
-        // );
-    }
-
-    function redeemCallback(
-        address receiver,
-        address owner,
-        uint shares,
-        uint rho,
-        uint drip,
-        uint chi
-    ) internal returns (uint assets) {
-        chi = (block.timestamp > rho) ? drip : chi;
+    ) external returns (uint256 assets) {
+        uint256 chi = (block.timestamp > pot.rho()) ? pot.drip() : pot.chi();
         assets = (shares * chi) / RAY;
         _burn(assets, shares, receiver, owner);
     }

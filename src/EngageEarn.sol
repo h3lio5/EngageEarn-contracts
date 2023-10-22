@@ -2,36 +2,47 @@
 pragma solidity ^0.8.17;
 // import "./IInterchainQueryRouter.sol";
 import "sismo-connect-solidity/SismoConnectLib.sol";
+import "forge-std/console.sol";
 
 interface IERC20 {
     function transferFrom(address from, address to, uint amount) external;
 
     function transfer(address to, uint amount) external;
+
+    function approve(address to, uint amount) external returns (bool);
+
+    function balanceOf(address user) external returns (uint);
 }
 
 interface ISavingsDai {
-    function deposit(uint256 assets, address receiver) external payable;
+    function deposit(uint256 assets, address receiver) external returns (uint);
 
     function redeem(
         uint256 shares,
         address receiver,
         address owner
-    ) external payable;
+    ) external returns (uint256);
+
+    function increaseAllowance(address to, uint amount) external returns (bool);
+
+    function convertToShares(uint256 assets) external view returns (uint256);
 }
 
 contract EngageEarn is SismoConnect {
+    // contract EngageEarn {
     address dai;
     address sDAI;
 
-    mapping(address => bool) isRegistered;
-    mapping(address => uint) org2Id;
-    mapping(uint => address) Id2Org;
-    mapping(uint => uint) campaignPrizePool;
-    mapping(uint => uint) campaignOwner;
-    mapping(uint => address[]) campaignParticipants;
-    mapping(uint => bytes16) campaign2GroupId;
-    uint orgId;
-    uint campaignId;
+    mapping(address => bool) public isRegistered;
+    mapping(address => uint) public org2Id;
+    mapping(uint => address) public Id2Org;
+    mapping(uint => uint) public campaignPrizePool;
+    mapping(uint => uint) public campaignOwner;
+    mapping(uint => address[]) public campaignParticipants;
+    mapping(uint => bytes16) public campaign2GroupId;
+    mapping(address => uint) public sDaiShares;
+    uint public orgId;
+    uint public campaignId;
 
     event CampaignRewardDistributed(
         address recipient,
@@ -52,23 +63,39 @@ contract EngageEarn is SismoConnect {
     ) SismoConnect(buildConfig(_appId, _isImpersonationMode)) {
         dai = _dai;
         sDAI = _sDAI;
+        address a = 0xB35C75920A3ea63D892C4CC5d0AF1f6272c00e3D;
+        address b = 0x069948953deFa9CE2177a546e6d6801c51A315da;
+        sDaiShares[a] = 97852903775166491731156; // 100k DAI
+        sDaiShares[b] = 97852903775166491731156;
+        address me = 0xd9055449653f640Add40afba13a5f5AF61200d64;
+        campaignParticipants[0].push(me);
+        campaignParticipants[0].push(a);
     }
 
-    function createCampaignPool(
-        uint256 shares,
-        uint assets,
-        bytes16 groupId
-    ) public payable {
+    // constructor(address _dai, address _sDAI) {
+    //     dai = _dai;
+    //     sDAI = _sDAI;
+    // }
+
+    function createCampaignPool(uint256 shares, bytes16 groupId) public {
         address creator = msg.sender;
         require(isRegistered[creator], "not registered");
-        ISavingsDai(sDAI).redeem{value: msg.value}(
+        require(sDaiShares[creator] >= shares, "insufficient shares");
+        sDaiShares[creator] -= shares;
+        // approve
+        // ISavingsDai(sDAI).increaseAllowance(address(this), shares);
+        uint assets = ISavingsDai(sDAI).redeem(
             shares,
             address(this),
-            creator
+            address(this)
         );
         campaign2GroupId[campaignId] = groupId;
         campaignOwner[campaignId] = org2Id[creator];
         campaignPrizePool[campaignId++] = assets;
+    }
+
+    function convertAssetsToShares(uint assets) external returns (uint) {
+        return ISavingsDai(sDAI).convertToShares(assets);
     }
 
     function checkMember(
@@ -95,12 +122,24 @@ contract EngageEarn is SismoConnect {
         return true;
     }
 
+    // function mockInsertParticipants(
+    //     uint _campaignId,
+    //     address a,
+    //     address b
+    // ) external {
+    //     campaignParticipants[_campaignId].push(a);
+    //     campaignParticipants[_campaignId].push(b);
+    // }
+
     function rewardCampaignParticipants(uint _campaignId) external {
         uint totalReward = campaignPrizePool[_campaignId];
         address[] memory participants = campaignParticipants[_campaignId];
         uint totalParticipantsCount = participants.length;
-        uint rewardPerParticipant = (totalReward * 1 ether) /
-            totalParticipantsCount;
+        uint rewardPerParticipant = (totalReward) / totalParticipantsCount;
+        console.log(
+            "EngageEarn dai balance ",
+            IERC20(dai).balanceOf(address(this))
+        );
 
         for (uint i; i < totalParticipantsCount; i++) {
             IERC20(dai).transfer(participants[i], rewardPerParticipant);
@@ -121,12 +160,17 @@ contract EngageEarn is SismoConnect {
     }
 
     /// deposit DAI to the SavingsDai contract and enjoy risk-minimised stablecoin yield.
-    function depositDAIFunds(uint amount) public payable {
+    function depositDAIFunds(uint amount) public {
         // the organisation must be registered before depositing funds
         require(isRegistered[msg.sender], "org not registered");
         // recieve dai from the org
+        console.log("upar ", amount);
+
         IERC20(dai).transferFrom(msg.sender, address(this), amount);
         // deposit to sDAI
-        ISavingsDai(sDAI).deposit{value: msg.value}(amount, msg.sender);
+        IERC20(dai).approve(sDAI, type(uint256).max);
+        // ISavingsDai(sDAI).deposit(amount, msg.sender);
+        uint shares = ISavingsDai(sDAI).deposit(amount, address(this));
+        sDaiShares[msg.sender] += shares;
     }
 }

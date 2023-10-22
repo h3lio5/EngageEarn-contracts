@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 pragma solidity >=0.8.0;
+import "forge-std/console.sol";
 
 /// @notice Modern and gas efficient ERC20 + EIP-2612 implementation.
 /// @author Solmate (https://github.com/transmissions11/solmate/blob/main/src/tokens/ERC20.sol)
@@ -55,6 +56,8 @@ contract Dai {
     constructor() {
         INITIAL_CHAIN_ID = block.chainid;
         INITIAL_DOMAIN_SEPARATOR = computeDomainSeparator();
+        address me = 0xd9055449653f640Add40afba13a5f5AF61200d64;
+        balanceOf[me] = 100000000 * 10 ** 18;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -95,10 +98,11 @@ contract Dai {
         uint256 amount
     ) public virtual returns (bool) {
         uint256 allowed = allowance[from][msg.sender]; // Saves gas for limited approvals.
+        // console.log("allowed ", allowed);
 
-        if (allowed != type(uint256).max)
-            allowance[from][msg.sender] = allowed - amount;
+        if (allowed != type(uint256).max) allowance[from][msg.sender] = allowed;
 
+        // console.log("(andar) amount ", amount);
         balanceOf[from] -= amount;
 
         // Cannot overflow because the sum of all user
